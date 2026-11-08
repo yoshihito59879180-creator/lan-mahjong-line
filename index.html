@@ -1,0 +1,115 @@
+<!doctype html>
+<!--
+  LAN雀卓 の LINE 連携の公開ページ（docs/profile/DESIGN_POINTS_phase4_v1.md X1、04_DESIGN_line_v3.md §4-2・§4-3）。
+  ・GitHub Pages の公開リポジトリに、このファイルだけを置く（アプリには入らない）。秘密の値は入っていない。
+  ・LINE の中（LIFF）で開き、LINE の本人確認のトークンを取り、同じ Wi-Fi の親 PC の個人画面へ戻す。
+  ・行き先の検査（line-target の間）は profile/line.js と同じ文。試験（tests/profile-phase4.test.cjs）で同じことを確かめる。
+  ・トークンは URL の # の後ろ（fragment）に付けて渡す。このページは何も保存せず、どこにも送らない。
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<title>LAN雀卓 LINE と連携</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 24px 16px; background: #0f2412; color: #e6f2e2; font: 16px/1.7 system-ui, sans-serif; }
+  main { max-width: 420px; margin: 0 auto; }
+  h1 { margin: 0 0 12px; font-size: 20px; color: #f5d020; }
+  p { margin: 0 0 12px; }
+  .note { font-size: 14px; color: rgba(200, 230, 200, 0.8); }
+  .ng { color: #ffb4a8; }
+  button { display: block; width: 100%; min-height: 52px; margin: 8px 0 12px; border: 0; border-radius: 10px;
+           background: #06c755; color: #fff; font: 700 17px system-ui, sans-serif; }
+  button.quiet { background: rgba(255, 255, 255, 0.12); color: #e6f2e2; font-weight: 400; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>LAN雀卓：LINE と連携</h1>
+  <p id="status">読み込んでいます…</p>
+  <button id="back" type="button" hidden>LAN雀卓 の画面へ戻る</button>
+  <button id="close" type="button" class="quiet" hidden>閉じる</button>
+  <p class="note">このページは、LINE の確認の結果を、同じ Wi-Fi にある LAN雀卓 の PC へ渡すだけです。何も保存しません。</p>
+</main>
+<script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<script>
+'use strict';
+// 本番の LIFF アプリの ID（オーナーが LINE Developers で足した時に入れる。X2）
+var LIFF_ID = '';
+
+/* line-target:start */
+// 行き先の検査（04 v3 §4-3）。公開ページ liff/index.html と同じ文（試験で同じ結果になることを確かめる）。
+// ・各部分は 0 か 1〜9 で始まる 3 桁までの数字（先頭の 0 は断る）、255 まで。
+// ・私設の範囲（10/8・172.16/12・192.168/16）。
+// ・ポートは 1024〜65535（先頭の 0 なし）。
+// ・URL を作り、hostname と port がもとの文字列と同じ。移動には、ここで作った URL をそのまま使う。
+function lineTarget(host, port) {
+  if (typeof host !== 'string' || typeof port !== 'string') return null;
+  if (!/^(?:0|[1-9][0-9]{0,2})(?:\.(?:0|[1-9][0-9]{0,2})){3}$/.test(host)) return null;
+  var n = host.split('.').map(Number);
+  for (var i = 0; i < 4; i++) if (n[i] > 255) return null;
+  var isPrivate = n[0] === 10 || (n[0] === 172 && n[1] >= 16 && n[1] <= 31) || (n[0] === 192 && n[1] === 168);
+  if (!isPrivate) return null;
+  if (!/^[1-9][0-9]{3,4}$/.test(port)) return null;
+  var p = Number(port);
+  if (p < 1024 || p > 65535) return null;
+  var url;
+  try { url = new URL('http://' + host + ':' + port + '/client.html'); } catch (e) { return null; }
+  if (url.hostname !== host || url.port !== port || url.protocol !== 'http:') return null;
+  return url;
+}
+/* line-target:end */
+
+function byId(id) { return document.getElementById(id); }
+function show(text, bad) {
+  byId('status').textContent = text;
+  byId('status').className = bad ? 'ng' : '';
+}
+function fail(text) {
+  show(text, true);
+  if (typeof liff !== 'undefined' && liff.isInClient && liff.isInClient()) {
+    byId('close').hidden = false;
+    byId('close').onclick = function () { liff.closeWindow(); };
+  }
+}
+
+function main() {
+  if (!LIFF_ID) return fail('このページはまだ準備中です。');
+  if (typeof liff === 'undefined') return fail('LINE の部品を読み込めませんでした。インターネットにつながっているか確かめてください。');
+  liff.init({ liffId: LIFF_ID, withLoginOnExternalBrowser: true }).then(function () {
+    var q = new URLSearchParams(location.search);
+    var target = lineTarget(q.get('h'), q.get('p'));
+    var k = q.get('k');
+    var m = q.get('m');
+    if (!target || !/^[0-9a-f]{32}$/.test(String(k)) || (m !== 'x' && m !== 'i')) {
+      return fail('リンクが正しくありません。LAN雀卓 の個人画面の「設定」から、もう一度始めてください。');
+    }
+    var idToken = liff.getIDToken();
+    if (!idToken) return fail('LINE の確認ができませんでした。LAN雀卓 の個人画面の「設定」から、もう一度始めてください。');
+    // 検査した URL をそのまま使う（04 §4-3 の 4）
+    target.hash = new URLSearchParams({ lt: idToken, k: k }).toString();
+    var back = target.href;
+    if (liff.isInClient() && m === 'x') {
+      // 個人画面は外部のブラウザー（Chrome・Safari）にある：そちらで戻す（D24・X7）
+      show('LINE の確認が済みました。LAN雀卓 の画面（ブラウザー）へ戻ります。戻らないときは、下のボタンを押してください。');
+      var go = function () { liff.openWindow({ url: back, external: true }); };
+      byId('back').hidden = false;
+      byId('back').onclick = go;
+      go();
+    } else {
+      // 個人画面が LINE の中にある、またはこのページを外部のブラウザーで開いた：同じ画面のまま戻す
+      show('LINE の確認が済みました。LAN雀卓 の画面へ戻ります…');
+      location.replace(back);
+    }
+  }).catch(function () {
+    fail('LINE の準備に失敗しました。LAN雀卓 の個人画面の「設定」から、もう一度始めてください。');
+  });
+}
+main();
+</script>
+</body>
+</html>
