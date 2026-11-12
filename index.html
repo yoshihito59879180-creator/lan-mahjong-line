@@ -3,6 +3,8 @@
   LAN雀卓 の LINE 連携の公開ページ（docs/profile/DESIGN_POINTS_phase4_v1.md X1、04_DESIGN_line_v3.md §4-2・§4-3）。
   ・GitHub Pages の公開リポジトリに、このファイルだけを置く（アプリには入らない）。秘密の値は入っていない。
   ・LINE の中（LIFF）で開き、LINE の本人確認のトークンを取り、同じ Wi-Fi の親 PC の個人画面へ戻す。
+  ・2 つの形を受ける（DESIGN_POINTS_phase5_v1.md Y10）：?h&p&k&m（Phase 4、自分のプロフィールに足す）と
+    ?h&p&c（Phase 5、招待から入る。c は接続コード。戻りは外のブラウザーへ #lt=トークン&c=コード）。
   ・行き先の検査（line-target の間）は profile/line.js と同じ文。試験（tests/profile-phase4.test.cjs）で同じことを確かめる。
   ・トークンは URL の # の後ろ（fragment）に付けて渡す。このページは何も保存せず、どこにも送らない。
 -->
@@ -29,9 +31,10 @@
 </head>
 <body>
 <main>
-  <h1>LAN雀卓：LINE と連携</h1>
+  <h1 id="title">LAN雀卓：LINE と連携</h1>
   <p id="status">読み込んでいます…</p>
   <button id="back" type="button" hidden>LAN雀卓 の画面へ戻る</button>
+  <button id="offline" type="button" class="quiet" hidden>LINE なしで入る</button>
   <button id="close" type="button" class="quiet" hidden>閉じる</button>
   <p class="note">このページは、LINE の確認の結果を、同じ Wi-Fi にある LAN雀卓 の PC へ渡すだけです。何も保存しません。</p>
 </main>
@@ -69,27 +72,80 @@ function show(text, bad) {
   byId('status').textContent = text;
   byId('status').className = bad ? 'ng' : '';
 }
+var ready = false; // liff.init が済んだか
+function inClient() {
+  return ready && typeof liff !== 'undefined' && liff.isInClient && liff.isInClient();
+}
 function fail(text) {
   show(text, true);
-  if (typeof liff !== 'undefined' && liff.isInClient && liff.isInClient()) {
+  if (inClient()) {
     byId('close').hidden = false;
     byId('close').onclick = function () { liff.closeWindow(); };
   }
+  offline();
 }
+
+// 招待（Phase 5）：?h=IP&p=ポート&c=接続コード。手続き ID（k）の代わりに接続コードを持つ。
+// Y8：失敗した時は、行き先の検査を通った時だけ「LINE なしで入る」（検査した URL＋ #c=接続コード。外のブラウザーで開く）。
+var q = new URLSearchParams(location.search);
+var invite = q.has('c') && !q.has('k');
+function inviteCode() {
+  var c = q.get('c');
+  return /^[A-Za-z0-9_-]{8}$/.test(String(c)) ? c : null;
+}
+function offline() {
+  if (!invite) return;
+  var target = lineTarget(q.get('h'), q.get('p'));
+  var c = inviteCode();
+  if (!target || !c) return; // 検査を通らない時は文だけ（どこへも移らない、F04）
+  target.search = '?openExternalBrowser=1';
+  target.hash = 'c=' + c;
+  var url = target.href;
+  var btn = byId('offline');
+  btn.hidden = false;
+  btn.onclick = function () {
+    if (inClient()) liff.openWindow({ url: url, external: true });
+    else location.href = url;
+  };
+}
+if (invite) {
+  document.title = 'LAN雀卓 LINE で参加';
+  byId('title').textContent = 'LAN雀卓：LINE で参加';
+}
+var AGAIN = invite
+  ? '招待のリンクをもう一度開くか、下の「LINE なしで入る」で入ってください。'
+  : 'LAN雀卓 の個人画面の「設定」から、もう一度始めてください。';
 
 function main() {
   if (!LIFF_ID) return fail('このページはまだ準備中です。');
   if (typeof liff === 'undefined') return fail('LINE の部品を読み込めませんでした。インターネットにつながっているか確かめてください。');
   liff.init({ liffId: LIFF_ID, withLoginOnExternalBrowser: true }).then(function () {
-    var q = new URLSearchParams(location.search);
+    ready = true;
     var target = lineTarget(q.get('h'), q.get('p'));
     var k = q.get('k');
     var m = q.get('m');
-    if (!target || !/^[0-9a-f]{32}$/.test(String(k)) || (m !== 'x' && m !== 'i')) {
-      return fail('リンクが正しくありません。LAN雀卓 の個人画面の「設定」から、もう一度始めてください。');
+    var c = inviteCode();
+    if (invite ? !target || !c : !target || !/^[0-9a-f]{32}$/.test(String(k)) || (m !== 'x' && m !== 'i')) {
+      return fail('リンクが正しくありません。' + AGAIN);
     }
     var idToken = liff.getIDToken();
-    if (!idToken) return fail('LINE の確認ができませんでした。LAN雀卓 の個人画面の「設定」から、もう一度始めてください。');
+    if (!idToken) return fail('LINE の確認ができませんでした。' + AGAIN);
+    if (invite) {
+      // 招待：LINE の確認の後は外のブラウザー（Chrome・Safari）へ戻す（Y3）
+      target.hash = new URLSearchParams({ lt: idToken, c: c }).toString();
+      var to = target.href;
+      if (liff.isInClient()) {
+        show('LINE の確認が済みました。LAN雀卓 の画面（ブラウザー）へ移ります。移らないときは、下のボタンを押してください。');
+        var open = function () { liff.openWindow({ url: to, external: true }); };
+        byId('back').hidden = false;
+        byId('back').onclick = open;
+        open();
+      } else {
+        show('LINE の確認が済みました。LAN雀卓 の画面へ移ります…');
+        location.replace(to);
+      }
+      return;
+    }
     // 検査した URL をそのまま使う（04 §4-3 の 4）
     target.hash = new URLSearchParams({ lt: idToken, k: k }).toString();
     var back = target.href;
@@ -106,7 +162,7 @@ function main() {
       location.replace(back);
     }
   }).catch(function () {
-    fail('LINE の準備に失敗しました。LAN雀卓 の個人画面の「設定」から、もう一度始めてください。');
+    fail('LINE の準備に失敗しました。' + AGAIN);
   });
 }
 main();
